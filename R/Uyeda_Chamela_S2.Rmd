@@ -1,0 +1,97 @@
+---
+title: "Chamela Adaptation Session 2"
+output:
+  html_document:
+    df_print: paged
+---
+
+# Stochastic Linear Ornstein-Uhlenbeck models for Comparative Hypotheses
+
+Let's suppose the predictor is not a discrete regime mapping, but a continuous predictor. Here we have salamander data
+where temperatures were taken at two scales: The temperature of a salamander in its microhabitat and the "macroscale" 
+temperature obtained for species via their geographic coordinates as mean average annual temperature from the BIOCLIM
+data raster.
+
+```{r}
+library(slouch)
+library(treeplyr)
+
+salDat <- readRDS("../data/SalamanderMicrohabitat.rds")
+salDat
+
+```
+
+
+Visualize the data with a phylomorphospace plot. 
+```{r}
+phytools::phylomorphospace(salDat$phy, as.matrix(salDat$dat[,c("Temp_macro_ave", "Soil_temp_ave")]), xlim=c(5, 20), ylim=c(5, 20), ftype="off")
+abline(0,1, lty=2) # One to one line
+```
+
+Perform a PGLS on the data using an OU model for the residuals in phylolm.
+
+```{r}
+library(phylolm)
+rownames(salDat$dat) <- salDat$phy$tip.label
+pgls_fit <- phylolm(Soil_temp_ave ~ Temp_macro_ave, data=salDat$dat, phy = salDat$phy, model = "OUfixedRoot")
+summary(pgls_fit)
+```
+Now let's fit a SLOUCH model. The first one we will fit will actually just repeat the previous exercise, and be another way of fitting a PGLS. 
+
+```{r}
+library(slouch)
+slouchpgls_fit <- slouch.fit(salDat$phy, species=salDat$phy$tip.label, response = salDat[['Soil_temp_ave']], direct.cov = salDat[['Temp_macro_ave']], hillclimb = TRUE)
+
+summary(slouchpgls_fit)
+```
+
+Next, we will allow the predictor to be a `random covariate`, or a predictor that evolves via Brownian Motion that has an effect on the primary optimum. We will 
+now obtain two regressions, and "evolutionary regression" corresponding to the realized relationship, and an "optimal regression" representing what? 
+
+```{r}
+slouch_fit <- slouch.fit(salDat$phy, species=salDat$phy$tip.label, response = salDat[['Soil_temp_ave']], random.cov = salDat[['Temp_macro_ave']], hillclimb = TRUE)
+
+summary(slouch_fit)
+```
+So far we have ignored measurement error. What do you predict the effect will be of measurement error on: 
+1. Phylogenetic signal?
+2. How will error in Y affect the slope? 
+3. How will error in X affect the slope? 
+
+```{r}
+slouchme_fit <- slouch.fit(salDat$phy, species=salDat$phy$tip.label, response = salDat[['Soil_temp_ave']], mv.response = salDat[['Soil_temp_errVar']], 
+                           random.cov = salDat[['Temp_macro_ave']], mv.random.cov = salDat[['Temp_macro_errVar']], hillclimb = TRUE)
+
+summary(slouchme_fit)
+```
+Now let's plot the optimal and evolutionary regressions.
+
+```{r}
+plot(salDat[['Temp_macro_ave']], salDat[['Soil_temp_ave']], xlim=c(5, 20), ylim=c(5,20), xlab="Macroscale Temperature", ylab="Microhabitat Temperature")
+abline(slouchme_fit$beta_primary$coefficients_bias_corr[1,1], slouchme_fit$beta_primary$coefficients_bias_corr[2,1], col="green", lwd=2)
+abline(slouchme_fit$beta_evolutionary$coefficients_bias_corr[1,1], slouchme_fit$beta_evolutionary$coefficients_bias_corr[2,1], col="blue", lwd=2)
+```
+
+Let's inspect the likelihood surface. This is a key step to understanding the uncertainty in your parameters. We will show
+the surface two log likelihood units below the peak, as this allows us to determine the well-supported regions of parameter space. 
+
+```{r}
+hls <- seq(0.0001, 300, length.out=40)
+vys <- seq(0.01, 25, length.out=40)
+
+slouch_gridsearch <- slouch.fit(salDat$phy, species=salDat$phy$tip.label, response = salDat[['Soil_temp_ave']], mv.response = salDat[['Soil_temp_errVar']], 
+                           random.cov = salDat[['Temp_macro_ave']], mv.random.cov = salDat[['Temp_macro_errVar']], hl_values = hls, vy_values = vys)
+
+```
+
+```{r}
+par(mar=c(1,1,1,1))
+plot(slouch_gridsearch, theta=0)
+plot(slouch_gridsearch, theta=-45)
+plot(slouch_gridsearch, theta=45)
+plot(slouch_gridsearch, phi=60)
+```
+
+That's it for now! Check out mvSLOUCH for even cooler, multivariate models. 
+
+

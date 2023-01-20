@@ -1,0 +1,398 @@
+---
+title: "Chamela OU Interactive Session 1"
+output: html_notebook
+---
+Welcome to the Chamela Modeling Adaptation Workshop!
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. We will begin by loading all the required packages for this tutorial. Please install these ahead of time so that your machine will be ready for the workshop.
+
+```{r}
+
+library(bayou)
+
+```
+
+# Simulating an OU process on a phylogeny
+
+Let's begin by simulating a multi-optimum Ornstein-Uhlenbeck process on a phylogeny so that we can get a feel for how these models work to model adaptation on phylogenies. First let's simulate a tree and rescale it to 100 million years. The second step is optional, but it will help us make sure all our trees and parameters are on a common scale that will probably be similar to many of the trees you may want to analyze. We will also reorder the tree into "postorder" format. **bayou** will automatically reorder the tree to postorder format, but it helps to begin by reordering your tree so that the branch numbers used by **bayou** can be easily matched to the tree. 
+
+```{r}
+
+  tree <- sim.bdtree(b = 1, d = 0, stop = "taxa", n = 50, seed = 1)
+  tree$edge.length <- tree$edge.length/max(branching.times(tree))*100
+  tree <- reorder.phylo(tree, "postorder")
+
+  plot(tree, cex = 0.5)
+  
+```
+
+We are now going to simulate an multi-peak OU process on this tree. bayou stores parameter in a parameter list that at a minimum, expects the parameters:
+
+* alpha
+* sig2
+* k
+* ntheta
+* theta
+* sb
+* t2 
+* loc
+
+Let's begin building this list, and then we'll talk about what each of these parameters means. 
+ 
+```{r}
+
+simpars <- list(alpha=0, sig2=1, k=0, ntheta=1, theta=0)
+
+```
+
+*alpha* and *sig2* are familiar parameters from our OU model, as well as our theta parameters with specify the value of the different regime optima. *k* specifies the numbers of shifts on the phylogeny, and *ntheta* specifies the number of optima. If there are no biologically convergent regimes, then ntheta = k + 1 = length(theta). Note that the root optimum is always the first *theta*, but we must provide locations for the other shifts so **bayou** knows where on the tree these occur. Here we can simply specify which branches (*sb*) and where on those branches (*loc*) we would like our shifts to occur. But first, let's simulate without shifts. 
+
+
+```{r}
+par(mfrow=c(2,2))
+simpars$alpha <- 0 
+plotOUtreesim(simpars, tree)
+abline(h = seq(-20,20,2), lty=2)
+
+simpars$alpha <- 0.1
+plotOUtreesim(simpars, tree)
+abline(h = seq(-20,20,2), lty=2)
+
+simpars$alpha <- 1 
+plotOUtreesim(simpars, tree)
+abline(h = seq(-20,20,2), lty=2)
+
+simpars$alpha <- 10 
+plotOUtreesim(simpars, tree)
+abline(h = seq(-20,20,2), lty=2)
+
+```
+
+Now let's add some shifts. 
+
+```{r}
+
+simpars$k <- 2 #Number of shifts
+simpars$ntheta <- 3 #Number of unique optima
+simpars$theta <- c(-5, 0, 3) # Values of the 3 optima
+```
+
+
+
+```{r}
+
+shiftlocations <- list(sb = c(94, 71), loc = c(6.23, 6.52))
+
+```
+
+We now combine the lists to obtain our full parameter list. 
+
+```{r}
+simpars <- c(simpars, shiftlocations)
+simpars$t2 <- 2:3
+simpars
+
+```
+
+```{r}
+
+plotBayoupars(simpars, tree)
+
+```
+
+
+The *$sb* element to the list specifies which branches the shifts occur on (assuming the tree is postordered). The length of *$sb*, *$t2* and *$loc* must equal *$k*. The element *$t2* specifies which optimum is shifted to, while *$loc* specifies where on the branch that shift occurs (distance from the node). Now, let's visualize a complete simulation on the tree:
+
+```{r}
+plotOUtreesim(simpars, tree)
+abline(h = simpars$theta, col=rainbow(3))
+
+```
+
+#### Questions:
+1. What is phylogenetic signal?
+
+2. Looking at this process, would you say this process has high or low phylogenetic signal? 
+(Hint: Consider only within a single regime. If you take 3 species from the red regime, how much more similar will closely related species be than distantly related species?)
+
+*** 
+
+Modify the parameters to produce more phylogenetic signal.
+
+```{r}
+
+simpars$alpha <- 0.01 #Type one (positive) number
+plotOUtreesim(simpars, tree)
+abline(h = simpars$theta, col=rainbow(3))
+
+```
+
+Hopefully it now looks like that unique evolutionary history sticks around for longer. But what did it do to the separation between regimes? Why? 
+
+Try modifying *sig2* and/or *theta* to restore separation between regimes.
+
+```{r}
+simpars$sig2  <-  0.01          #Type one (positive) number
+simpars$theta <- c(0,3, 15)  #Type simpars$ntheta numbers
+
+plotOUtreesim(simpars, tree)
+abline(h=seq(-10, 10, 1), lty=3, lwd=0.5)
+abline(h = simpars$theta, col=rainbow(3))
+
+```
+
+OU models have often come under criticism recently for having flat likelihood ridges and poorly estimated parameters (especially *alpha*). While some of this criticism is valid, it's important to understand **how the parameters affect the model** and especially, that **the parameters in the model have units**.  
+
+Brownian Motion, Ornstein-Uhlenbeck models and Early Burst models are Gaussian models. Thus, simply predict the mean and (co)variance of a multivariate normal distribution. We can use some internal functions of **bayou** to visualize how *alpha* affects the expected covariance of an OU/BM model. Let's plot the expected variance-covariance of a Brownian motion model, which is simply the parameter *sigma^2* times the VCV matrix of the tree (the shared branch lengths between tips). Let's assume *sigma^2* is 1 or simplicity. 
+
+```{r}
+plotOU.VCV <- function(alpha, tree){
+  ftree <- rescale(tree, "OU")
+  if(alpha > 0){
+    ntree <- ftree(alpha)
+  } else {
+    ntree <- tree
+  }
+  tH <- max(branching.times(ntree))
+  plot(ntree, show.tip.label=FALSE, x.lim=c(0, 2*tH))
+  VCV <- vcv.phylo(ntree)
+  if(alpha > 0){
+    VCV <- bayou:::.ouMatrix(VCV, alpha = alpha)
+  }
+  VCV <- VCV[nrow(VCV):1,]
+  
+  image(x=seq(1.01*tH, 2*tH, length.out=length(tree$tip.label)), y=seq(1, length(tree$tip.label), length.out=length(tree$tip.label)), z=VCV, xaxt="n", yaxt="n", add=TRUE)  
+}
+
+
+plotOU.VCV(0, tree)
+
+```
+
+In an OU model, it's not quite so simple. Instead, the covariance between tips degrades over time proportional to the parameter *alpha*. Eventually, given enough time of independent evolution, the covariance will be 0 and the replicate lineages will equilibrate to a stationary variance (*Vy*) equal to *sigma^2/(2 X alpha)*. 
+
+Using the internal function of bayou called *.ouMatrix*, we can visualize how these parameters affect the expected covariance. 
+
+```{r}
+
+plotOU.VCV(0.000000001, tree)
+plotOU.VCV(0.0001, tree)
+plotOU.VCV(0.001, tree)
+plotOU.VCV(0.01, tree)
+plotOU.VCV(0.1, tree)
+plotOU.VCV(1, tree)
+plotOU.VCV(10, tree)
+plotOU.VCV(10000000, tree)
+
+
+```
+
+Scroll through the different heat maps and see how different alpha values affect the expected covariance among tips. Do you see much difference between *alpha = 0.000000001* and a value 1,000,000 times larger at *alpha = 0.001*? What about between *alpha = 10* and *alpha = 100,000,000*? Look at how *.ouMatrix* transforms the tree. Why are these different values indistinguishable? 
+
+```{r}
+
+bayou:::.ouMatrix
+
+```
+
+So what values if your optimizer is optimizing *alpha*, and all it knows is that it's very large or very small, it will have a really tough time finding the correct value! But ultimately, it doesn't matter much for the predictions of the model. They basically predict the same thing regardless of whether the parameter is large vs. huge (or...tiny vs. miniscule). 
+
+We did see a lot of change between what values? Convert these to phylogenetic half-life and compare to the height of the tree. What do you conclude about the range of *alpha* values that are distinguishable?
+
+###### Challenge question
+
+1. Consider the following scenarios, how would you generate them by changing the parameters of an OU model (if at all)?
+  
+  + Brownian Motion with a trend (i.e. phylogenetic covariance that never goes away, but regimes that slowly and continuously get pulled apart in         
+    different directions.)
+  
+  + White noise with extremely narrow adaptive zones (i.e. very little phylogenetic covariance within regimes, very small stationary variance)
+  
+  + Brownian Motion with sudden jumps (i.e. phylogenetic covariance that never goes away, but sudden shifts)
+  
+  + Lineages very close to their adaptive optima with very large amounts of phylogenetic signal and very narrow adaptive zones.
+
+
+
+
+*Multi-Optima OU models with OUwie*
+
+By far the most common usage of OU models is not as a single-optimum model as a measure of phylogenetic signal, but 
+to test hypotheses of adaptation in response to a varying predictor variable. This work was pioneered by Thomas Hansen 
+and Emilia Martins, and brought into wide practice with the work of Marguerite Butler and Aaron King (ouch) which is 
+still a good package to use today, but it uses slightly different tree and data structures, so we'll use OUwie by Jeremy Beaulieu
+and Brian O'Meara instead. 
+
+Inside the treeplyr package is a dataset of anolis lizards that we'll use to demonstrate. This is a demo dataset, so don't take it
+too seriously (e.g. the traits `awesomeness`, `hostility` and `attitude` are fake traits that Luke Harmon simulated by just drawing 
+random numbers from a normal distribution, but the other data are not fake to the best of my understanding). 
+
+```{r}
+library(OUwie) 
+library(treeplyr) # For tree & data management
+library(phytools) # For viz 
+
+data(anolis)
+```
+Anoles are famous for showing convergent ecomorphs. Let's see how many species we have in each category. We can compare
+that to the hypothesis that morphology segregates by, for example, which island they are on. Notice some categories are
+quite small. This means it may be hard to estimate unique parameters for those categories, and we may want to lump them
+together with similar states. 
+
+CG = Crown Giants, GB = Grass-Bush, T = Trunk, TC = Trunk-Crown, TG = Trunk Ground, TW = Twig, U = Unclassified/Other
+
+```{r}
+table(anolis$dat$ecomorph)
+table(anolis$dat$island)
+```
+
+Using `treeplyr`, we can match our phylogeny to our data and use dplyr tools to generate "regime paintings" that 
+represent hypotheses about the groupings of ecomorphs that have distinct/convergent morphologies.
+
+```{r}
+anolis_td <- make.treedata(anolis$phy, anolis$dat) %>% 
+                        filter(., ecomorph != "U") #Drop "U" which are "unclassified" and have nothing in common. Is this the right thing to do? 
+anolis_td$dat$ecomorph <- droplevels(anolis_td$dat$ecomorph) #Drop the "U" level from the ecomorph factor.
+anolis_td <- mutate(anolis_td, OU1global = "global", 
+                               OU2cg = recode_factor(ecomorph, GB="Other", T="Other",TC="Other", TG="Other", TW="Other"),
+                               OU3cgtw = recode_factor(ecomorph, GB="Other", T="Other",TC="Other", TG="Other"),
+                               OU3island = recode_factor(island, Jamaica="Other", 'Puerto Rico' = "Other"),
+                               OU4trunk=recode_factor(ecomorph, TG = "T", TC="T"), 
+                               OU6all=ecomorph)
+
+
+```
+
+There are two ways of representing the history of regimes in OUwie. Either labeling all nodes with reconstructed ancestral states
+by filling the vector `$node.labels` in your tree object. Alternatively, we can create a stochastic character map from our tip 
+states. We will do the latter. How many should you do in your analysis? 
+
+```{r}
+
+phy_OU6all <- make.simmap(anolis_td$phy, anolis_td[['OU6all']])
+plotSimmap(phy_OU6all, fsize=0.5)
+
+```
+Now, let's create a data frame that OUwie wants to see. It has 3 columns, a species' name vector, a vector of regime states, and  
+the continuous trait itself. We're going to start with Snout-to-Vent Length on the log scale. 
+
+*Why use the log scale for linear measurements?*
+
+```{r}
+trait <- "SVL"
+ouwiedat <- data.frame("Genus_species"=anolis_td$phy$tip.label, "Reg"=anolis_td$dat$OU6all, "X"=anolis_td[[trait]])
+ouwiedat
+
+```
+
+We're ready for our first model fit! We're going to estimate distinct optima for each ecomorph. 
+
+```{r}
+OU6all_Fit <- OUwie(phy_OU6all, ouwiedat, model="OUM", simmap.tree=TRUE)
+OU6all_Fit
+```
+
+Let's loop through, make a stochastic character map (just one?!?!), and fit each regime hypothesis. 
+
+```{r}
+par(mfrow=c(2,3)) #let's look at all our hypotheses together
+plot(anolis_td$phy, show.tip.label=FALSE)
+
+Fits <- list()
+Hypotheses <- colnames(anolis_td$dat)[11:16]
+for(i in Hypotheses[-1]){
+  phy_hyp <-  make.simmap(anolis_td$phy, anolis_td[[i]])
+  
+  plotSimmap(phy_hyp, ftype="off")
+  ouwiedat_hyp <- data.frame("Genus_species"=anolis_td$phy$tip.label, "Reg"=anolis_td[[i]], "X"=anolis_td[[trait]])
+  Fits[[i]] <- OUwie(phy_hyp, ouwiedat, model="OUM", simmap.tree=TRUE)
+}
+
+```
+
+```{r}
+
+ouwiedat_global <- data.frame("Genus_species"=anolis_td$phy$tip.label, "Reg"=anolis_td[["OU1global"]], "X"=anolis_td[[trait]])
+phy_global <- anolis_td$phy
+phy_global$node.label <- rep(1, phy_global$Nnode)
+Fits[["OU1"]] <- OUwie(phy_global, ouwiedat_global, model="OU1")
+Fits[["BM"]] <- OUwie(phy_global, ouwiedat_global, model="BM1")
+
+```
+
+```{r}
+sapply(Fits, function(x) x$AICc)
+```
+
+
+```{r}
+Fits[['OU4trunk']]
+```
+
+Let's compare to PGLS with OU distributed residuals. How are these models different? Why does it matter? Why don't I need to use
+the stochastic character map when I do a PGLS? 
+
+```{r}
+library(phylolm)
+rownames(anolis_td$dat) <- anolis_td$phy$tip.label
+Fits[["PGLS4trunk"]] <- phylolm(SVL ~ OU4trunk, data=anolis_td$dat, phy = anolis_td$phy, model = "OUfixedRoot")
+```
+
+
+```{r}
+Param_OU <- Fits[["OU4trunk"]]$theta[,1]
+Param_PGLS <- Fits[["PGLS4trunk"]]$coefficients
+Param_PGLS[2:4] <- Param_PGLS[2:4] + Param_PGLS[1]
+
+Param_OU <- c(Fits[['OU4trunk']]$solution[,1], Param_OU)
+Param_PGLS <- c(Fits[['PGLS4trunk']]$optpar, Fits[['PGLS4trunk']]$sigma2, Param_PGLS)
+
+param_names <- c("alpha", "sigmasq", "theta_T", "theta_CG", "theta_GB", "theta_TW")
+
+names(Param_OU) <- names(Param_PGLS) <- param_names
+
+Param_ests <- rbind("OU"=Param_OU, "PGLS"=Param_PGLS)
+Param_ests
+```
+
+What was the difference in the two models with respect to their parameter values? 
+
+*OUwie with variable evolutionary dynamics*
+We have just asked how the predictor trait of ecomorph (hopefully defined without respect to morphology as circular reasoning...). 
+Let's now explore a new set of models that allow for the same ecomorphs to affect the dynamics of evolutionary change itself by
+having different sigma^2 and alpha parameters for each regime. These affect the phylogenetic signal within each regime, as well
+as the width of the adaptive zone. 
+
+```{r}
+new_models <- c("BMS", "OUM", "OUMV", "OUMA", "OUMVA") # What do these models represent? Check `?OUwie'. We'll also redo OUM so it's on the same stochastic character map.
+phy_hyp <-  make.simmap(anolis_td$phy, anolis_td[["OU4trunk"]]) #We're now expanding on our best-fitting model 
+ouwiedat_hyp <- data.frame("Genus_species"=anolis_td$phy$tip.label, "Reg"=anolis_td[["OU4trunk"]], "X"=anolis_td[[trait]])
+for(i in new_models){
+  Fits[[i]] <- OUwie(phy_hyp, ouwiedat, model=i, simmap.tree=TRUE)
+}
+
+```
+
+```{r}
+sapply(Fits, function(x) x$AICc)
+```
+```{r}
+AZ_widths <- rbind(
+  "OUMVA"=round(4*(Fits[['OUMVA']]$solution['sigma.sq',]/(2*Fits[['OUMVA']]$solution['alpha',]))^0.5, 2),
+  "OUMV" = round(4*(Fits[['OUMV']]$solution['sigma.sq',]/(2*Fits[['OUMV']]$solution['alpha',]))^0.5, 2), 
+  "OUMA" = round(4*(Fits[['OUMA']]$solution['sigma.sq',]/(2*Fits[['OUMA']]$solution['alpha',]))^0.5, 2),            
+  "OUM" = round(4*(Fits[['OUM']]$solution['sigma.sq',]/(2*Fits[['OUM']]$solution['alpha',]))^0.5, 2))
+
+Halflives <- rbind(
+    "OUMVA" = round(log(2)/Fits[['OUMVA']]$solution['alpha',],2),
+    "OUMV" = round(log(2)/Fits[['OUMV']]$solution['alpha',],2), 
+    "OUMA" = round(log(2)/Fits[['OUMA']]$solution['alpha',],2), 
+    "OUM" = round(log(2)/Fits[['OUM']]$solution['alpha',],2)
+)
+
+AZ_widths
+Halflives
+```
+
